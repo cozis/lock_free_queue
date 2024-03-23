@@ -2,17 +2,15 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include "tinycthread.h"
-#include "tinycsem.h"
 #include "lock_free_queue.h"
 
 #define NUM_THREADS 30
 
+#define OPERATIONS_PER_WORKER 100
+
 struct lock_free_queue queue;
 
-struct tinycsem consumed;
-struct tinycsem produced;
-
-static int 
+static int
 kind_of_atomic_fprintf(FILE *stream, const char *fmt, ...)
 {
     char msg[256];
@@ -27,8 +25,6 @@ kind_of_atomic_fprintf(FILE *stream, const char *fmt, ...)
     return fwrite(msg, 1, len, stream);
 }
 
-#define OPERATIONS_PER_WORKER 10000
-
 int consumer(void *arg)
 {
     (void) arg;
@@ -37,19 +33,12 @@ int consumer(void *arg)
 
     for (int i = 0; i < OPERATIONS_PER_WORKER; i++) {
 
-        tinycsem_wait(&produced);
-
         int value;
         lock_free_queue_pop(&queue, &value);
 
         sum += value;
-
-        kind_of_atomic_fprintf(stderr, "Thread consumed %d (i=%d)\n", value, i);
-
-        tinycsem_signal(&consumed);
     }
 
-    kind_of_atomic_fprintf(stderr, "Consumer stopped (sum=%d)\n", sum);
     return sum;
 }
 
@@ -62,32 +51,23 @@ int producer(void *arg)
     int sum = 0;
     
     for (int i = 0; i < OPERATIONS_PER_WORKER; i++) {
-        tinycsem_wait(&consumed);
 
         int value = rand() % 10000;
 
         lock_free_queue_push(&queue, &value);
 
-        kind_of_atomic_fprintf(stderr, "Thread produced %d (i=%d)\n", value, i);
-
         sum += value;
-
-        tinycsem_signal(&produced);
     }
 
-    kind_of_atomic_fprintf(stderr, "Producer stopped (sum=%d)\n", sum);
     return sum;
 }
 
-#define MAX_ITEMS 100
+#define MAX_ITEMS 10
 
 int main()
 {
     int items[MAX_ITEMS];
     lock_free_queue_INIT(&queue, items);
-
-    tinycsem_init(&consumed, MAX_ITEMS, MAX_ITEMS);
-    tinycsem_init(&produced, 0,         MAX_ITEMS);
 
     thrd_t threads[NUM_THREADS];
     int created = 0;
@@ -122,7 +102,5 @@ int main()
         produced_sum, consumed_sum,
         (produced_sum == consumed_sum) ? "OK" : "Don't match!!");
 
-    tinycsem_free(&consumed);
-    tinycsem_free(&produced);
     return 0;
 }

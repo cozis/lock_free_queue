@@ -3,6 +3,23 @@
 #include <stdatomic.h>
 #include "lock_free_queue.h"
 
+#include <stdio.h>
+#include <stdarg.h>
+static int
+kind_of_atomic_fprintf(FILE *stream, const char *fmt, ...)
+{
+    char msg[256];
+
+    va_list args;
+    va_start(args, fmt);
+    int len = vsnprintf(msg, sizeof(msg), fmt, args);
+    va_end(args);
+
+    if (len < 0) return 0;
+
+    return fwrite(msg, 1, len, stream);
+}
+
 void
 lock_free_queue_init(struct lock_free_queue *q, 
                      void *arrptr, int arrlen,
@@ -12,7 +29,8 @@ lock_free_queue_init(struct lock_free_queue *q,
 
     q->head = 0;
     q->tail = 0;
-    q->temp = 0;
+    q->temp_head = 0;
+    q->temp_tail = 0;
     q->size = arrlen / cell;
     q->base = arrptr;
     q->cell = cell;
@@ -21,24 +39,35 @@ lock_free_queue_init(struct lock_free_queue *q,
 static void*
 item_addr(struct lock_free_queue *q, int index)
 {
-    assert(index >= 0 && index < q->size);
-    return q->base + q->cell * index;
+    return q->base + q->cell * (index % q->size);
 }
 
-static int
+static uint64_t
 acquire_push_location(struct lock_free_queue *q)
 {
-    int old_temp;
-    int new_temp;
+    uint64_t old_temp_tail;
+    uint64_t new_temp_tail;
+
     do {
-        old_temp = q->temp;
-        new_temp = (old_temp + 1) % q->size;
-    } while (!atomic_compare_exchange_strong(&q->temp, &old_temp, new_temp));
-    return old_temp;
+
+        uint64_t old_temp_head;
+
+        old_temp_tail = q->temp_tail;
+        old_temp_head = q->temp_head;
+
+        if (old_temp_head + q->size == old_temp_tail)
+            return UINT64_MAX; // Queue is full
+
+        assert(old_temp_head + q->size > old_temp_tail);
+
+        new_temp_tail = old_temp_tail + 1;
+    } while (!atomic_compare_exchange_weak(&q->temp_tail, &old_temp_tail, new_temp_tail));
+
+    return old_temp_tail;
 }
 
-static void 
-release_push_location(struct lock_free_queue *q, int index)
+static void
+release_push_location(struct lock_free_queue *q, uint64_t index)
 {
     // The current thread already inserted an
     // item at position "index", which comes
@@ -51,34 +80,83 @@ release_push_location(struct lock_free_queue *q, int index)
     // Before being able to move the tail over
     // this element, we need to wait for other
     // threads to do it.
+
     while (q->tail != index);
 
-    // At this point only this thread is allowed
-    // to push the tail forward
+    q->tail++;
+}
 
-    q->tail = (q->tail + 1) % q->size;
+bool
+lock_free_queue_try_push(struct lock_free_queue *q, void *src)
+{
+    uint64_t index = acquire_push_location(q);
+    if (index == UINT64_MAX) return false;
+
+    void *dst = item_addr(q, index);
+    memcpy(dst, src, q->cell);
+
+    //kind_of_atomic_fprintf(stdout, "push at %d\n", index % q->size);
+
+    release_push_location(q, index);
+    return true;
 }
 
 void
 lock_free_queue_push(struct lock_free_queue *q, void *src)
 {
-    int index = acquire_push_location(q);
+    while (!lock_free_queue_try_push(q, src));
+}
 
-    void *dst = item_addr(q, index);
+static uint64_t
+acquire_pop_location(struct lock_free_queue *q)
+{
+    uint64_t old_head;
+    uint64_t new_head;
+    do {
+        uint64_t old_tail;
+
+        // It's important to get head before tail
+        // or head may be incremented over tail before
+        // querying it.
+        old_head = q->head;
+        old_tail = q->tail;
+
+        if (old_head == old_tail)
+            return UINT64_MAX;
+
+        assert(old_tail > old_head);
+
+        new_head = old_head + 1;
+    } while (!atomic_compare_exchange_weak(&q->head, &old_head, new_head));
+    return old_head;
+}
+
+static void
+release_pop_location(struct lock_free_queue *q, uint64_t index)
+{
+    while (q->temp_head != index);
+
+    q->temp_head++;
+}
+
+bool
+lock_free_queue_try_pop(struct lock_free_queue *q, void *dst)
+{
+    uint64_t index = acquire_pop_location(q);
+    if (index == UINT64_MAX)
+        return false;
+
+    void *src = item_addr(q, index);
     memcpy(dst, src, q->cell);
 
-    release_push_location(q, index);
+    //kind_of_atomic_fprintf(stdout, "pop at %d\n", index % q->size);
+
+    release_pop_location(q, index);
+    return true;
 }
 
 void
 lock_free_queue_pop(struct lock_free_queue *q, void *dst)
 {
-    int old_head;
-    int new_head;
-    do {
-        old_head = q->head;
-        new_head = (old_head + 1) % q->size;
-        void *src = item_addr(q, old_head);
-        memcpy(dst, src, q->cell);
-    } while (!atomic_compare_exchange_strong(&q->head, &old_head, new_head));
+    while (!lock_free_queue_try_pop(q, dst));
 }
