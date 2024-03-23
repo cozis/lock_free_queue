@@ -3,23 +3,6 @@
 #include <stdatomic.h>
 #include "lock_free_queue.h"
 
-#include <stdio.h>
-#include <stdarg.h>
-static int
-kind_of_atomic_fprintf(FILE *stream, const char *fmt, ...)
-{
-    char msg[256];
-
-    va_list args;
-    va_start(args, fmt);
-    int len = vsnprintf(msg, sizeof(msg), fmt, args);
-    va_end(args);
-
-    if (len < 0) return 0;
-
-    return fwrite(msg, 1, len, stream);
-}
-
 void
 lock_free_queue_init(struct lock_free_queue *q, 
                      void *arrptr, int arrlen,
