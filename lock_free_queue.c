@@ -57,7 +57,7 @@ release_push_location(struct lock_free_queue *q, uint64_t index)
     // after the queue's tail.
     //
     // It may be possible that other threads
-    // inserted items before this one, buf still
+    // inserted items before this one, but still
     // after the tail
     //
     // Before being able to move the tail over
@@ -77,8 +77,6 @@ lock_free_queue_try_push(struct lock_free_queue *q, void *src)
 
     void *dst = item_addr(q, index);
     memcpy(dst, src, q->cell);
-
-    //kind_of_atomic_fprintf(stdout, "push at %d\n", index % q->size);
 
     release_push_location(q, index);
     return true;
@@ -131,8 +129,6 @@ lock_free_queue_try_pop(struct lock_free_queue *q, void *dst)
 
     void *src = item_addr(q, index);
     memcpy(dst, src, q->cell);
-
-    //kind_of_atomic_fprintf(stdout, "pop at %d\n", index % q->size);
 
     release_pop_location(q, index);
     return true;
