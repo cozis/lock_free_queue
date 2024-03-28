@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include "tinycthread.h"
-#include "lock_free_queue.h"
+#include "../lock_free_queue.h"
 
 #define NUM_THREADS 30
 
